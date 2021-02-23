@@ -56,7 +56,7 @@ def roll_workers():
 
     attempts = 0
     while True:
-        if len(fly.get_json("workers")) == EXPECTED_WORKERS or attempts == 60:
+        if len(fly.get_json("workers")) == EXPECTED_WORKERS or attempts > 60:
             break
 
         print(".", end='', flush=True)
@@ -79,32 +79,41 @@ def roll_workers():
 
     print(new_workers)
 
+    assert len(new_workers) > 0
+
     for worker in old_workers:
         fly.run("land-worker", "--worker", worker)
 
     attempts = 0
+    successfully_landed_workers = False
     while True:
-        if attempts == 60:
+        if attempts > 60:
             print("Timing out!")
             break
 
         landed_workers = get_landed_instances(fly.get_json("workers"))
 
         if len(landed_workers) == len(old_workers):
-            for worker in landed_workers:
-                fly.run("prune-worker", "-w", worker)
+            successfully_landed_workers = True
             break
 
         print('.', end='', flush=True)
 
         sleep(1)
         attempts += 1
+
     print('\n')
 
-    auto_scaling_group.set_desired_capacity(
-        AutoScalingGroupName=AUTOSCALING_GROUP_NAME,
-        DesiredCapacity=DEFAULT_NUMBER_OF_WORKERS,
-        HonorCooldown=True,
-    )
+    if successfully_landed_workers:
+        for worker in landed_workers:
+            fly.run("prune-worker", "-w", worker)
 
-    print("All good, now press CTRL+C")
+        auto_scaling_group.set_desired_capacity(
+            AutoScalingGroupName=AUTOSCALING_GROUP_NAME,
+            DesiredCapacity=DEFAULT_NUMBER_OF_WORKERS,
+            HonorCooldown=True,
+        )
+
+        print("All good, now press CTRL+C")
+    else:
+        print("Problem while landing workers.")

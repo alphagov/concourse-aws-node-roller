@@ -26,16 +26,14 @@ EXPECTED_WORKERS = 4
 CONCOURSE_URL = "http://127.0.0.1:8080"
 # COMPOSE_PATH = "docker-compose"
 COMPOSE_PATH = "/home/work/.pyenv/shims/docker-compose"
+DOCKER_PATH = "/home/work/bin/docker"
 
 
 def number_of_docker_workers():
     docker = from_env()
 
-    containers = docker.containers.list()
-
     total = 0
-
-    for container in containers:
+    for container in docker.containers.list():
         container_name = container.name  # node_roller_worker_1
         index_of_last_underscore = container_name.rindex('_')
         if container_name.endswith('_worker', 0, index_of_last_underscore):
@@ -58,7 +56,7 @@ def setup_mocked_as_group():
     def set_desired_capacity(self, new_capacity):
         print("Setting new desired capacity: %s" % str(new_capacity))
 
-        if number_of_docker_workers() > new_capacity:
+        if number_of_docker_workers() < new_capacity:
             run_docker_compose_cmd("up -d --scale worker=%s --no-recreate" % str(new_capacity))
 
         set_desired_capacity_old(self, new_capacity)
@@ -144,10 +142,7 @@ def wait_for_concourse():
 
 def main():
     docker_compose_thread = Thread(target=run_docker_compose_instance)
-    # concourse_checker_thread = Thread(target=wait_for_concourse)
-
     docker_compose_thread.start()
-    # concourse_checker_thread.start()
 
     wait_for_concourse()
 

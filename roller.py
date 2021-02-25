@@ -14,18 +14,11 @@ SLEEP_WAIT = 10
 
 
 def get_landed_instances(fly_blob):
-    landed_instances = []
-    for obj in fly_blob:
-        if obj['state'] == 'landed':
-            landed_instances.append(obj['name'])
-    return set(landed_instances)
+    return frozenset(obj['name'] for obj in fly_blob if obj['state'] == 'landed')
 
 
 def get_names(fly_blob):
-    names = []
-    for obj in fly_blob:
-        names.append(obj['name'])
-    return set(names)
+    return frozenset(obj['name'] for obj in fly_blob)
 
 
 def roll_workers():
@@ -38,82 +31,76 @@ def roll_workers():
     fly.login(username='test', password='test', team_name='main')
     fly.run("sync")
 
+    original_asg = client.describe_auto_scaling_groups(
+        AutoScalingGroupNames=[AUTOSCALING_GROUP_NAME],
+    )["AutoScalingGroups"][0]
+    original_instance_count = original_asg["DesiredCapacity"]
+    print(f"ASG has original DesiredCapacity of {original_instance_count}")
+    doubled_instance_count = original_instance_count * 2
+
     old_workers = fly.get_json("workers")
+    print(f"Found {len(old_workers)} original workers")
 
-    pre_number_of_workers = len(old_workers)
+    if original_instance_count != len(old_workers):
+        raise RuntimeError("Original instance count doesn't match number of workers")
 
-    assert pre_number_of_workers == DEFAULT_NUMBER_OF_WORKERS, "Current number of workers: %s" % str(pre_number_of_workers)
-
-    print("Pre number of workers: %s" % str(pre_number_of_workers))
-
+    print(f"Scaling ASG to {doubled_instance_count} instances.", end="")
     auto_scaling_group.set_desired_capacity(
         AutoScalingGroupName=AUTOSCALING_GROUP_NAME,
-        DesiredCapacity=EXPECTED_WORKERS,
+        DesiredCapacity=doubled_instance_count,
         HonorCooldown=True,
     )
 
-    print("Please wait while we scale")
-
-    attempts = 0
-    while True:
-        if len(fly.get_json("workers")) == EXPECTED_WORKERS or attempts > 60:
+    for attempt in range(60):
+        if len(fly.get_json("workers")) == doubled_instance_count:
+            print('\n')
             break
 
         print(".", end='', flush=True)
 
         sleep(1)
-        attempts += 1
-
-    print('\n')
+    else:
+        raise RuntimeError("Timed out waiting for workers to scale")
 
     old_workers = get_names(old_workers)
     all_workers = get_names(fly.get_json("workers"))
 
     print("-- OLD Workers --")
     print(old_workers)
+
     print('-- ALL Workers --')
     print(all_workers)
+
     print('-- NEW Workers --')
-
-    new_workers = list(all_workers - old_workers)
-
+    new_workers = all_workers - old_workers
     print(new_workers)
+    assert new_workers
 
-    assert len(new_workers) > 0
-
+    print("Landing old workers.", end="")
     for worker in old_workers:
         fly.run("land-worker", "--worker", worker)
 
-    attempts = 0
-    successfully_landed_workers = False
-    while True:
-        if attempts > 60:
-            print("Timing out!")
-            break
-
+    for attempt in range(60):
         landed_workers = get_landed_instances(fly.get_json("workers"))
-
         if len(landed_workers) == len(old_workers):
-            successfully_landed_workers = True
+            print('\n')
             break
 
         print('.', end='', flush=True)
 
         sleep(1)
-        attempts += 1
-
-    print('\n')
-
-    if successfully_landed_workers:
-        for worker in landed_workers:
-            fly.run("prune-worker", "-w", worker)
-
-        auto_scaling_group.set_desired_capacity(
-            AutoScalingGroupName=AUTOSCALING_GROUP_NAME,
-            DesiredCapacity=DEFAULT_NUMBER_OF_WORKERS,
-            HonorCooldown=True,
-        )
-
-        print("All good, now press CTRL+C")
     else:
-        print("Problem while landing workers.")
+        raise RuntimeError("Timed out waiting for workers to land")
+
+    print("Pruning old workers.")
+    for worker in landed_workers:
+        fly.run("prune-worker", "-w", worker)
+
+    print("Scaling ASG back to {original_instance_count} instances.")
+    auto_scaling_group.set_desired_capacity(
+        AutoScalingGroupName=AUTOSCALING_GROUP_NAME,
+        DesiredCapacity=original_instance_count,
+        HonorCooldown=True,
+    )
+
+    print("All good, now press CTRL+C")
